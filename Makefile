@@ -6,7 +6,7 @@ VERSION=1.0
 
 
 dist:
-	tar cJf $(NAME)-$(version).tar.xz --transform=s@^@$(NAME)-$(version)/@ *
+	tar cJf $(NAME)-$(VERSION).tar.xz --transform=s@^@$(NAME)-$(VERSION)/@ *
 
 install:
 	mkdir -p $(DESTDIR)$(hubplugindir)
