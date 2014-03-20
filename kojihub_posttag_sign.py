@@ -1,4 +1,5 @@
 import base64
+import ConfigParser
 import os
 import subprocess
 import tempfile
@@ -123,6 +124,9 @@ class Signer(object):
 
 @callback("postTag")
 def nbsign(cbtype, tag, build, user, force=False):
+    config = ConfigParser.SafeConfigParser()
+    config.read("/etc/koji-hub/plugins/posttag-sign.conf")
+
     if tag["name"] not in tosign_tags:
         # Not signing builds for this tag
         return
