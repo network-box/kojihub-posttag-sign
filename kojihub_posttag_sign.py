@@ -103,8 +103,6 @@ class Signer(object):
     def sign(self):
         rpms = context.handlers.call("listBuildRPMs", self.build["id"])
 
-        log.error("Session: %s" % context.session)
-
         for rpm_info in rpms:
             rpm_path = self.__get_rpm_path(rpm_info)
 
@@ -136,7 +134,5 @@ def nbsign(cbtype, tag, build, user, force=False):
     if tag["name"] not in tosign_tags:
         log.error("Not signing builds for tag '%s'" % tag["name"])
         return
-
-    log.error("User: %s" % user)
 
     Signer(build).sign()
