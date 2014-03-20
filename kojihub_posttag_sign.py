@@ -37,9 +37,14 @@ class Signer(object):
                            % rpm_path)
 
     def __request_signature(self, rpm_path):
+        env = dict([(k, v) for (k, v) in os.environ.items() \
+                            if k.startswith("LC_") \
+                            or k == "LANG"])
+        env["PATH"] = ""
+
         with open(rpm_path, "r") as in_:
             try:
-                proc = subprocess.Popen(self.sign_cmd,
+                proc = subprocess.Popen(self.sign_cmd, env=env,
                                         stdin=in_,
                                         stdout=subprocess.PIPE,
                                         stderr=subprocess.PIPE)
