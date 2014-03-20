@@ -128,7 +128,7 @@ class Signer(object):
 @callback("postTag")
 def nbsign(cbtype, tag, build, user, force=False):
     if tag["name"] not in tosign_tags:
-        log.error("Not signing builds for tag '%s'" % tag["name"])
+        # Not signing builds for this tag
         return
 
     Signer(build).sign()
