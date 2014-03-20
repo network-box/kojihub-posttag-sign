@@ -1,5 +1,4 @@
 import base64
-import logging
 import os
 import subprocess
 import tempfile
@@ -9,9 +8,6 @@ from koji.context import context
 from koji.plugin import callback
 
 import rpm
-
-
-log = logging.getLogger("koji.plugin.kojihub_posttag_nbsign")
 
 
 # TODO: Make that a config file
