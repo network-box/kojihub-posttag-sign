@@ -1,6 +1,7 @@
 import base64
 import ConfigParser
 import os
+import shlex
 import subprocess
 import tempfile
 
@@ -9,11 +10,6 @@ from koji.context import context
 from koji.plugin import callback
 
 import rpm
-
-
-# TODO: Make that a config file
-signing_server = "10.8.16.170"
-signing_user = "nbrpm-sign"
 
 
 class AlreadySignedError(Exception):
@@ -25,13 +21,11 @@ class SigningError(Exception):
 
 
 class Signer(object):
-    def __init__(self, build):
+    def __init__(self, build, signcmd):
         self.build = build
         self.builddir = koji.pathinfo.build(build)
 
-        self.sign_cmd = ["/usr/bin/ssh", "-T",
-                         "-q", "-o", "StrictHostKeyChecking=no",
-                         "%s@%s" % (signing_user, signing_server)]
+        self.sign_cmd = signcmd
 
     def __get_rpm_path(self, rpm_info):
         rpm_path = os.path.join(self.builddir, koji.pathinfo.rpm(rpm_info))
@@ -133,4 +127,6 @@ def nbsign(cbtype, tag, build, user, force=False):
         # Not signing builds for this tag
         return
 
-    Signer(build).sign()
+    signcmd = shlex.split(config.get("posttag-sign", "signcmd"))
+
+    Signer(build, signcmd).sign()
