@@ -1,5 +1,4 @@
 import base64
-import binascii
 import logging
 import os
 import subprocess
@@ -8,8 +7,6 @@ import tempfile
 import koji
 from koji.context import context
 from koji.plugin import callback
-
-import nss.nss
 
 import rpm
 
@@ -142,8 +139,4 @@ def nbsign(cbtype, tag, build, user, force=False):
 
     log.error("User: %s" % user)
 
-    nss.nss.nss_init_nodb()
-
     Signer(build).sign()
-
-    nss.nss.nss_shutdown()
