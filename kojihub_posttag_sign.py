@@ -12,7 +12,6 @@ import rpm
 
 
 # TODO: Make that a config file
-tosign_tags = ("nb5.0-free-testing", "nb5.0-nonfree-testing", "nb7-free")
 signing_server = "10.8.16.170"
 signing_user = "nbrpm-sign"
 
@@ -127,7 +126,10 @@ def nbsign(cbtype, tag, build, user, force=False):
     config = ConfigParser.SafeConfigParser()
     config.read("/etc/koji-hub/plugins/posttag-sign.conf")
 
-    if tag["name"] not in tosign_tags:
+    tags = map(lambda x: x.strip(),
+               config.get("posttag-sign", "tags").split(","))
+
+    if tag["name"] not in tags:
         # Not signing builds for this tag
         return
 
