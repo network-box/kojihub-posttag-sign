@@ -93,7 +93,7 @@ class Signer(object):
         if len(sigs) > 0:
             raise AlreadySignedError()
 
-        return koji.rip_rpm_sighdr(signed_rpm_path)
+        return koji.rip_rpm_sighdr(signed_rpm_path), sigkey
 
     def sign(self):
         rpms = context.handlers.call("listBuildRPMs", self.build["id"])
@@ -104,10 +104,11 @@ class Signer(object):
             signed_rpm_tmppath = self.__request_signature(rpm_path)
 
             try:
-                sighdr = self.__get_sighdr(signed_rpm_tmppath, rpm_path,
-                                           rpm_info)
+                sighdr, sigkey = self.__get_sighdr(signed_rpm_tmppath,
+                                                   rpm_path, rpm_info)
                 context.handlers.call("addRPMSig", rpm_info['id'],
                                       base64.encodestring(sighdr))
+                context.handlers.call("writeSignedRPM", rpm_info, sigkey)
 
             except AlreadySignedError as e:
                 # That's fine, nothing to do here
