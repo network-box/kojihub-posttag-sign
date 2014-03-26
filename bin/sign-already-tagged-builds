@@ -1,0 +1,298 @@
+#!/usr/bin/python
+
+
+import argparse
+import base64
+import ConfigParser
+import logging
+import operator
+import os
+import subprocess
+import sys
+import tempfile
+import urllib2
+
+import koji
+
+
+class StdoutFilter(logging.Filter):
+    """A logging filter for stdout/stderr
+
+    This allows sending to stdout DEBUG and INFO messages, while the rest goes
+    to stderr.
+    """
+    def filter(self, record):
+        return record.levelno <= logging.INFO
+
+
+class Formatter(logging.Formatter):
+    def format(self, record):
+        if record.levelname in ("WARNING", "ERROR"):
+            return "%s: %s" % (record.levelname, record.msg)
+
+        return "%s" % record.msg
+    
+
+class SigningError(Exception):
+    pass
+
+
+class Signer(object):
+    def __init__(self, args=None):
+        args = self.__parse_args(args)
+
+        self.env = self.__sanitize_env()
+
+        self.log = self.__get_logger(args.verbose)
+        self.koji, self.kojipath = self.__get_koji(args.koji_config)
+
+        self.tag = args.tag
+        self.key = args.keyid
+        self.builds = args.builds
+
+        if len(self.builds) == 0:
+            self.builds = self.__get_builds()
+
+        # TODO: Make that a config
+        self.sign_cmd = ["/usr/bin/ssh", "-T", "-q", "-o",
+                         "StrictHostKeyChecking=no", "nbrpm-sign@10.8.16.170"]
+
+    def __get_koji(self, koji_config):
+        conf = ConfigParser.SafeConfigParser()
+        conf.read(koji_config)
+
+        certs = {}
+        for attr in ("cert", "ca", "serverca"):
+            certs[attr] = os.path.expanduser(conf.get("koji", attr))
+
+        session = koji.ClientSession(conf.get("koji", "server"))
+        session.ssl_login(certs["cert"], certs["ca"], certs["serverca"])
+
+        kojipath = koji.PathInfo(topdir=conf.get("koji", "topurl"))
+
+        return session, kojipath
+
+    def __get_logger(self, verbose=False):
+        log = logging.getLogger(__name__)
+        formatter = Formatter()
+
+        stdouthandler = logging.StreamHandler(sys.stdout)
+        stdouthandler.addFilter(StdoutFilter())
+        stdouthandler.setFormatter(formatter)
+        log.addHandler(stdouthandler)
+
+        stderrhandler = logging.StreamHandler(sys.stderr)
+        stderrhandler.setLevel(logging.WARNING)
+        stderrhandler.setFormatter(formatter)
+        log.addHandler(stderrhandler)
+
+        if verbose:
+            log.setLevel(logging.DEBUG)
+
+        else:
+            log.setLevel(logging.INFO)
+
+        return log
+
+    def __parse_args(self, args):
+        parser = argparse.ArgumentParser()
+
+        parser.add_argument("-v", "--verbose",
+                            action="store_true", default=False,
+                            help="Print more details about what is being "
+                                 "done.")
+        parser.add_argument("--koji-config", dest="koji_config",
+                            default="/etc/koji.networkbox.conf",
+                            help="The path to the Koji config file to use. "
+                                 "Defaults to the Network Box Koji config.")
+
+        parser.add_argument("tag", metavar="TAG",
+                            help="The tag in which to sign builds.")
+        parser.add_argument("keyid", metavar="KEYID",
+                            help="The key ID with which to sign")
+        parser.add_argument("builds", nargs="*", metavar="BUILD",
+                            help="An optional list of builds. All builds for "
+                                 "this tag will be signed if no build is "
+                                 "specified.")
+
+        return parser.parse_args(args)
+
+    def __sanitize_env(self):
+        env = dict([(k, v) for (k, v) in os.environ.items() \
+                            if k.startswith("LC_") \
+                            or k == "LANG"])
+        env["PATH"] = ""
+
+        return env
+
+    def __get_builds(self):
+        return sorted(self.koji.listTagged(self.tag, latest=True,
+                                           inherit=True),
+                      key=operator.itemgetter('package_name'))
+
+    def __download_rpm(self, build, rpm):
+        rpmurl = "%s/%s" % (self.kojipath.build(build),
+                            self.kojipath.rpm(rpm))
+        rpmpath = "/tmp/%s" % rpmurl.rsplit("/", 1)[-1]
+
+        self.log.info("Downloading %s..." % rpmurl)
+
+        with open(rpmpath, "w") as out_:
+            in_ = urllib2.urlopen(rpmurl)
+            out_.write(in_.read())
+            in_.close()
+
+        return rpmpath
+
+    def __sign_rpm(self, rpmpath):
+        rpm = os.path.basename(rpmpath)
+        self.log.info("Signing %s..." % rpm)
+
+        with open(rpmpath, "r") as in_:
+            try:
+                proc = subprocess.Popen(self.sign_cmd, env=self.env,
+                                        stdin=in_,
+                                        stdout=subprocess.PIPE,
+                                        stderr=subprocess.PIPE)
+                out, err = proc.communicate()
+
+                if proc.returncode != 0:
+                    raise SigningError("Could not sign %s: %s" % (rpm, err))
+
+            except Exception as e:
+                raise SigningError("Could not sign %s: %s" % (rpm, e))
+
+        # So signing seems to have gone well...
+        tmpfd, tmppath = tempfile.mkstemp(prefix=rpm)
+        tmpfile = os.fdopen(tmpfd, "w")
+        tmpfile.write(out)
+        tmpfile.close()
+
+        return tmppath
+
+    def __get_sighdr(self, signedpath, rpmpath):
+        rpmpath = os.path.basename(rpmpath)
+
+        try:
+            header_fields = koji.get_header_fields(signedpath, ('siggpg', 'sigpgp'))
+
+        except rpm.error:
+            raise SigningError("Signing server returned corrupt RPM for %s"
+                               % rpmpath)
+
+        if header_fields['siggpg'] is not None:
+            sigkey = header_fields['siggpg']
+
+        elif header_fields['sigpgp'] is not None:
+            sigkey = header_fields['sigpgp']
+
+        else:
+            raise SigningError("Signing server returned unsigned RPM for %s"
+                               % rpmpath)
+
+        sigkey = koji.get_sigpacket_key_id(sigkey)
+
+        if sigkey != self.key:
+            raise SigningError("Signing server signed %s with key '%s', but "
+                               "we expected '%s'"
+                               % (rpmpath, sigkey, self.key))
+
+        return koji.rip_rpm_sighdr(signedpath)
+
+    def __upload_signature(self, rpm, sighdr):
+        self.log.info("Uploading signature for %s.%s.rpm..."
+                      % (rpm["nvr"], rpm["arch"]))
+
+        try:
+            self.koji.addRPMSig(rpm["id"], base64.encodestring(sighdr))
+
+        except Exception as e:
+            raise SigningError("Adding the signature to Koji failed: %s" % e)
+
+        try:
+            self.koji.writeSignedRPM(rpm, self.key)
+
+        except Exception as e:
+            raise SigningError("Added the signature to Koji, but writing the "
+                               "signed RPM failed: %s" % e)
+
+
+    def __ensure_uploaded(self, build, rpm):
+        signedurl = "%s/%s" % (self.kojipath.build(build),
+                               self.kojipath.signed(rpm, self.key))
+
+        try:
+            res = urllib2.urlopen(signedurl)
+
+        except urllib2.HTTPError as e:
+            if e.code == 404:
+                raise SigningError("The signed RPM doesn't seem to have been uploaded")
+
+            else:
+                raise e
+
+    def sign_builds(self):
+        num_builds = len(self.builds)
+        self.log.info("Signing %d build%s tagged as '%s'"
+                      % (num_builds, "s" if num_builds > 1 else "", self.tag))
+        self.log.debug("Builds: %s" % self.builds)
+
+        for build in self.builds:
+            self.log.info("\n%s\n%s" % (build["nvr"], "-"*len(build["nvr"])))
+            rpms = sorted(self.koji.listBuildRPMs(build["id"]),
+                          key=operator.itemgetter("name"))
+
+            for rpm in rpms:
+	        self.log.info("Handling %s.%s..." % (rpm["nvr"], rpm["arch"]))
+
+                sigs = self.koji.queryRPMSigs(rpm_id=rpm['id'], sigkey=self.key)
+
+                if len(sigs) > 0:
+                    self.log.error("%s.%s is already signed!" % (rpm["nvr"], rpm["arch"]))
+                    continue
+
+                rpmpath = self.__download_rpm(build, rpm)
+
+                try:
+                    signedpath = self.__sign_rpm(rpmpath)
+
+                except SigningError as e:
+                    log.error(e)
+                    os.unlink(rpmpath)
+                    continue
+
+                try:
+                    sighdr = self.__get_sighdr(signedpath, rpmpath)
+
+                except SigningError as e:
+                    log.error(e)
+                    os.unlink(rpmpath)
+                    os.unlink(signedpath)
+                    continue
+
+                try:
+                    self.__upload_signature(rpm, sighdr)
+
+                except Exception as e:
+                    self.log.error(e)
+                    os.unlink(rpmpath)
+                    os.unlink(signedpath)
+                    continue
+
+                try:
+                    self.__ensure_uploaded(build, rpm)
+
+                except Exception as e:
+                    self.log.error(e)
+                    os.unlink(rpmpath)
+                    os.unlink(signedpath)
+                    continue
+
+
+                os.unlink(rpmpath)
+                os.unlink(signedpath)
+
+
+if __name__ == "__main__":
+    signer = Signer()
+    sys.exit(signer.sign_builds())
