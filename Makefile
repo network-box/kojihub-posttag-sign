@@ -2,7 +2,7 @@ hubplugindir=/usr/lib/koji-hub-plugins
 hubpluginconfdir=/etc/koji-hub/plugins
 
 NAME=kojihub-posttag-sign
-VERSION=1.1
+VERSION=1.2
 
 
 dist:
