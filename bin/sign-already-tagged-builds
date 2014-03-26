@@ -48,10 +48,7 @@ class Signer(object):
 
         self.tag = args.tag
         self.key = args.keyid
-        self.builds = args.builds
-
-        if len(self.builds) == 0:
-            self.builds = self.__get_builds()
+        self.builds = self.__get_builds(args.builds)
 
         # TODO: Make that a config
         self.sign_cmd = ["/usr/bin/ssh", "-T", "-q", "-o",
@@ -125,10 +122,16 @@ class Signer(object):
 
         return env
 
-    def __get_builds(self):
-        return sorted(self.koji.listTagged(self.tag, latest=True,
-                                           inherit=True),
-                      key=operator.itemgetter('package_name'))
+    def __get_builds(self, build_nvrs):
+        if build_nvrs:
+            builds = [self.koji.getBuild(nvr) for nvr in build_nvrs]
+
+        else:
+            builds = sorted(self.koji.listTagged(self.tag, latest=True,
+                                                 inherit=True),
+                            key=operator.itemgetter('package_name'))
+
+        return builds
 
     def __download_rpm(self, build, rpm):
         rpmurl = "%s/%s" % (self.kojipath.build(build),
